@@ -1,28 +1,26 @@
 import pandas as pd
 import numpy as np
-from autogluon.vision import ImagePredictor, ImageDataset
+from autogluon.multimodal import MultiModalPredictor
 from sklearn.model_selection import StratifiedKFold
-from typing import Dict, Tuple
+from typing import Dict
 import pickle
 import os
 
-
-def cross_val_predict_autogluon_image_dataset(
-    dataset: ImageDataset,
+def cross_val_predict_autogluon_image_dataframe(
+    df: pd.DataFrame,  # DataFrame with 'image' and 'label' columns
     out_folder: str = "./cross_val_predict_run/",
     *,
     n_splits: int = 5,
-    model_params: Dict = {"epochs": 1, "holdout_frac": 0.2},
-    ngpus_per_trial: int = 1,
+    model_params: Dict = {"model.timm_image.checkpoint_name": "timm/swin_base_patch4_window7_224.ms_in22k_ft_in1k"},
     time_limit: int = 7200,
     random_state: int = 123,
-) -> Tuple:
+) -> None:
     """Run stratified K-folds cross-validation with AutoGluon image model.
 
     Parameters
     ----------
-    dataset : gluoncv.auto.data.dataset.ImageClassificationDataset
-      AutoGluon dataset for image classification.
+    df : Pandas.DataFrame
+       Pandas.DataFrame for image classification.
 
     out_folder : str, default="./cross_val_predict_run/"
       Folder to save cross-validation results. Save results after each split (each K in K-fold).
@@ -31,16 +29,13 @@ def cross_val_predict_autogluon_image_dataset(
       Number of splits for stratified K-folds cross-validation.
 
     model_params : Dict, default={"epochs": 1, "holdout_frac": 0.2}
-      Passed into AutoGluon's `ImagePredictor().fit()` method.
-
-    ngpus_per_trial : int, default=1
-      Passed into AutoGluon's `ImagePredictor().fit()` method.
+      Passed into AutoGluon's `MultiModalPredictor().fit()` method.
 
     time_limit : int, default=7200
-      Passed into AutoGluon's `ImagePredictor().fit()` method.
+      Passed into AutoGluon's `MultiModalPredictor().fit()` method.
 
     random_state : int, default=123
-      Passed into AutoGluon's `ImagePredictor().fit()` method.
+      Passed into AutoGluon's `MultiModalPredictor().fit()` method.
 
     Returns
     -------
@@ -52,7 +47,7 @@ def cross_val_predict_autogluon_image_dataset(
     skf = StratifiedKFold(n_splits=n_splits, shuffle=False)
     skf_splits = [
         [train_index, test_index]
-        for train_index, test_index in skf.split(X=dataset, y=dataset.label)
+        for train_index, test_index in skf.split(X=df, y=df['label'])
     ]
 
     # run cross-validation
@@ -67,32 +62,28 @@ def cross_val_predict_autogluon_image_dataset(
         train_index, test_index = split
 
         # init model
-        predictor = ImagePredictor(verbosity=0)
+        predictor = MultiModalPredictor(label='label', verbosity=0)
 
         # train model on train indices in this split
         predictor.fit(
-            train_data=dataset.iloc[train_index],
-            ngpus_per_trial=ngpus_per_trial,
+            train_data=df.iloc[train_index],
             hyperparameters=model_params,
             time_limit=time_limit,
-            random_state=random_state,
+            seed =random_state,
         )
 
         # predict on test indices in this split
 
         # predicted probabilities for test split
         pred_probs = predictor.predict_proba(
-            data=dataset.iloc[test_index], as_pandas=False
+            data=df.iloc[test_index], as_pandas=False
         )
 
         # predicted features (aka embeddings) for test split
         # why does autogluon predict_feature return array of array for the features?
         # need to use stack to convert to 2d array (https://stackoverflow.com/questions/50971123/converty-numpy-array-of-arrays-to-2d-array)
-        pred_features = np.stack(
-            predictor.predict_feature(data=dataset.iloc[test_index], as_pandas=False)[
-                :, 0
-            ]
-        )
+        pred_features = predictor.extract_embedding(data=df.iloc[test_index])
+
 
         # save output of model + split in pickle file
 
@@ -113,11 +104,11 @@ def cross_val_predict_autogluon_image_dataset(
             _save_to_pickle(pred_probs, get_pickle_file_name("test_pred_probs"))
             _save_to_pickle(pred_features, get_pickle_file_name("test_pred_features"))
             _save_to_pickle(
-                dataset.iloc[test_index].label.values,
+                df.iloc[test_index].label.values,
                 get_pickle_file_name("test_labels"),
             )
             _save_to_pickle(
-                dataset.iloc[test_index].image.values,
+                df.iloc[test_index].image.values,
                 get_pickle_file_name("test_image_files"),
             )
             _save_to_pickle(test_index, get_pickle_file_name("test_indices"))
